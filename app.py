@@ -236,6 +236,44 @@ leaderboard_df, timeline_df = calculate_scores_and_timeline(user_picks, matches_
 # -----------------------------------------------------------------------------
 st.title("🏆 Office World Cup Prediction League")
 st.markdown(f"**Last Refreshed:** {last_refreshed}")
+
+# -----------------------------------------------------------------------------
+# STATISTICS OVERVIEW
+# -----------------------------------------------------------------------------
+num_users = len(user_picks)
+
+col1, col2, col3, col4 = st.columns(4)
+
+def render_pot_progress_tile(col, pot_name, icon, bar_color):
+    with col:
+        with st.container(height=170, border=True):
+            st.markdown(f"<div style='font-size: 0.8rem; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 0.5px;'>{icon} Top {pot_name}</div>", unsafe_allow_html=True)
+            st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+            
+            top_teams = user_picks[pot_name].value_counts().head(3)
+            medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+            
+            for rank, (team, count) in enumerate(top_teams.items(), 1):
+                pct = (count / num_users) * 100
+                medal = medals.get(rank, "")
+                
+                st.markdown(f"""
+                <div style='margin-bottom: 6px;'>
+                    <div style='font-size: 0.78rem; color: #111; display: flex; justify-content: space-between; align-items: center;'>
+                        <span style='white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px;'>{medal} <b>{team}</b></span>
+                        <span style='color: gray; font-size: 0.75rem; flex-shrink: 0;'>{count} ({pct:.0f}%)</span>
+                    </div>
+                    <div style='background-color: rgba(128, 128, 128, 0.12); border-radius: 3px; height: 5px; width: 100%; margin-top: 2px; overflow: hidden;'>
+                        <div style='background-color: {bar_color}; height: 100%; width: {pct}%;'></div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+render_pot_progress_tile(col1, 'Pot A', '🥇', '#3B82F6')
+render_pot_progress_tile(col2, 'Pot B', '🥈', '#10B981')
+render_pot_progress_tile(col3, 'Pot C', '🥉', '#F59E0B')
+render_pot_progress_tile(col4, 'Pot D', '🔥', '#EF4444')
+
 st.divider()
 
 tab1, tab2, tab3, tab4 = st.tabs(["📊 Leaderboard", "🗓️ Schedule & Results", "📈 Title Race Tracker", "📜 Game Rules"])
@@ -243,14 +281,94 @@ tab1, tab2, tab3, tab4 = st.tabs(["📊 Leaderboard", "🗓️ Schedule & Result
 with tab1:
     st.subheader("🥇 Current Standings")
     if not leaderboard_df.empty:
-        st.dataframe(
-            leaderboard_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Points": st.column_config.NumberColumn("Points", format="%.1f 🔥")
-            }
-        )
+        # Construct the HTML table without leading spaces to avoid Markdown pre block interpretation
+        table_html = """<style>
+.league-container {
+    height: 5000px;
+    max-height: 5000px;
+    overflow-y: auto;
+    border: 1px solid rgba(128, 128, 128, 0.2);
+    border-radius: 8px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+}
+.league-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: inherit;
+    color: inherit;
+    font-size: 0.9rem;
+}
+.league-table th {
+    background-color: rgba(128, 128, 128, 0.08);
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.5px;
+    padding: 12px 16px;
+    border-bottom: 2px solid rgba(128, 128, 128, 0.15);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    text-align: left;
+}
+.league-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(128, 128, 128, 0.1);
+    text-align: left;
+}
+.league-table tr:last-child td {
+    border-bottom: none;
+}
+.league-table tr:hover {
+    background-color: rgba(128, 128, 128, 0.03);
+}
+.top3-highlight {
+    background-color: rgba(6, 182, 212, 0.12) !important;
+    color: #0891b2 !important;
+    font-weight: 700 !important;
+}
+</style>
+<div class="league-container">
+<table class="league-table">
+<thead>
+<tr>
+<th>Rank</th>
+<th>Name</th>
+<th>Pot A</th>
+<th>Pot B</th>
+<th>Pot C</th>
+<th>Pot D</th>
+<th>Points</th>
+</tr>
+</thead>
+<tbody>"""
+        for _, row in leaderboard_df.iterrows():
+            rank = row['Rank']
+            name = row['Name']
+            pot_a = row['Pot A']
+            pot_b = row['Pot B']
+            pot_c = row['Pot C']
+            pot_d = row['Pot D']
+            points = f"{row['Points']:.1f} 🔥"
+            
+            glow_class = ""
+            if rank in [1, 2, 3]:
+                glow_class = " class='top3-highlight'"
+                
+            table_html += f"""<tr>
+<td>{rank}</td>
+<td{glow_class}>{name}</td>
+<td>{pot_a}</td>
+<td>{pot_b}</td>
+<td>{pot_c}</td>
+<td>{pot_d}</td>
+<td><b>{points}</b></td>
+</tr>"""
+            
+        table_html += """</tbody>
+</table>
+</div>"""
+        st.markdown(table_html, unsafe_allow_html=True)
     else:
         st.info("No data available to calculate standings.")
 
