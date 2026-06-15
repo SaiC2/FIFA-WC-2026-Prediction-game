@@ -153,6 +153,136 @@ def fetch_tournament_data():
 matches_df, last_refreshed = fetch_tournament_data()
 
 # -----------------------------------------------------------------------------
+# TEAM NAME NORMALIZATION AND HELPER FUNCTIONS
+# -----------------------------------------------------------------------------
+TEAM_NAME_MAPPING = {
+    "T\u00fcrkiye": "Turkey",
+    "Cabo Verde": "Cape Verde",
+    "C\u00f4te d\u2019Ivoire": "Ivory Coast",
+    "IR Iran": "Iran",
+    "Czechia": "Czech Republic"
+}
+
+def abbreviate_team(name):
+    special_abbrevs = {
+        "Argentina": "Arg",
+        "Australia": "Aus",
+        "Austria": "Aut",
+        "Belgium": "Bel",
+        "Brazil": "Bra",
+        "Canada": "Can",
+        "Colombia": "Col",
+        "Croatia": "Cro",
+        "Czech Republic": "Cze",
+        "Czechia": "Cze",
+        "Denmark": "Den",
+        "Ecuador": "Ecu",
+        "England": "Eng",
+        "France": "Fra",
+        "Germany": "Ger",
+        "Ghana": "Gha",
+        "Haiti": "Hai",
+        "Iran": "IRN",
+        "IR Iran": "IRN",
+        "Ivory Coast": "Civ",
+        "C\u00f4te d'Ivoire": "Civ",
+        "C\u00f4te d\u2019Ivoire": "Civ",
+        "Japan": "Jpn",
+        "Jordan": "Jor",
+        "Mexico": "Mex",
+        "Morocco": "Mar",
+        "Netherlands": "Ned",
+        "New Zealand": "NZL",
+        "Norway": "Nor",
+        "Paraguay": "Par",
+        "Portugal": "Por",
+        "Saudi Arabia": "KSA",
+        "Scotland": "Sco",
+        "Senegal": "Sen",
+        "South Africa": "RSA",
+        "Spain": "Esp",
+        "Sweden": "Swe",
+        "Switzerland": "Sui",
+        "Turkey": "Tur",
+        "T\u00fcrkiye": "Tur",
+        "Uruguay": "Uru",
+        "USA": "USA",
+        "United States": "USA",
+        "Uzbekistan": "Uzb",
+        "Cabo Verde": "CPV",
+        "Cape Verde": "CPV",
+        "Cura\u00e7ao": "Cur",
+        "Curaao": "Cur",
+        "South Korea": "KOR"
+    }
+    if name in special_abbrevs:
+        return special_abbrevs[name]
+    # Fallback to first 3 letters capitalized
+    clean_name = str(name).replace(" ", "")
+    return clean_name[:3].title()
+
+def get_tooltip_html(country, pot_category, matches_df):
+    if not country or pd.isna(country) or str(country).strip() == "":
+        return ""
+    country_str = str(country).strip()
+    norm_c = TEAM_NAME_MAPPING.get(country_str, country_str)
+    
+    # Find all matches for this country that are finished
+    country_matches = matches_df[
+        (matches_df['is_finished'] == True) & 
+        ((matches_df['home'] == norm_c) | (matches_df['away'] == norm_c))
+    ]
+    if country_matches.empty:
+        return '<span class="tooltip-text"><span style="color: #94a3b8; font-style: italic;">Matches yet to be played.</span></span>'
+    
+    html_lines = []
+    for _, match in country_matches.iterrows():
+        home_abbr = abbreviate_team(match['home'])
+        away_abbr = abbreviate_team(match['away'])
+        home_goals = match['home_goals']
+        away_goals = match['away_goals']
+        
+        # Calculate points relative to this country
+        pts = 0
+        match_stage = str(match['stage'])
+        if pot_category in SCORING_RULES:
+            # 1. Match Result Points (Group Stage)
+            if "Matchday" in match_stage:
+                if match['winner'] == norm_c:
+                    pts += SCORING_RULES[pot_category]['win']
+                elif match['is_draw']:
+                    pts += SCORING_RULES[pot_category]['draw']
+            
+            # 2. Advancement Points
+            if "Round of 32" in match_stage:
+                pts += SCORING_RULES[pot_category]['Round of 32']
+            elif "Round of 16" in match_stage:
+                pts += SCORING_RULES[pot_category]['Round of 16']
+            elif "Quarter" in match_stage:
+                pts += SCORING_RULES[pot_category]['Quarter-finals']
+            elif "Semi" in match_stage:
+                pts += SCORING_RULES[pot_category]['Semi-finals']
+            elif "Final" in match_stage and "Third" not in match_stage:
+                pts += SCORING_RULES[pot_category]['Final']
+                if match['winner'] == norm_c:
+                    pts += SCORING_RULES[pot_category]['Winner']
+        
+        pts_str = f"+{pts:g} pts" if pts > 0 else "0 pts"
+        
+        # Determine result relative to this country
+        if match['is_draw']:
+            res_html = f'<span style="color: #F59E0B; font-weight: bold; background: rgba(245, 158, 11, 0.15); padding: 1px 4px; border-radius: 3px; font-size: 0.75rem;">D ({pts_str})</span>'
+        elif match['winner'] == norm_c:
+            res_html = f'<span style="color: #10B981; font-weight: bold; background: rgba(16, 185, 129, 0.15); padding: 1px 4px; border-radius: 3px; font-size: 0.75rem;">W ({pts_str})</span>'
+        else:
+            res_html = f'<span style="color: #EF4444; font-weight: bold; background: rgba(239, 68, 68, 0.15); padding: 1px 4px; border-radius: 3px; font-size: 0.75rem;">L ({pts_str})</span>'
+            
+        html_lines.append(f'<div style="white-space: nowrap; margin-bottom: 4px;">{home_abbr} Vs {away_abbr}, {home_goals} - {away_goals} {res_html}</div>')
+        
+    tooltip_inner = "".join(html_lines)
+    return f'<span class="tooltip-text">{tooltip_inner}</span>'
+
+# -----------------------------------------------------------------------------
 # SCORING ENGINE
 # -----------------------------------------------------------------------------
 def calculate_scores_and_timeline(picks_df, results_df):
@@ -174,10 +304,11 @@ def calculate_scores_and_timeline(picks_df, results_df):
                     match_stage = str(match['stage'])
                     points_earned_in_match = 0
                     
-                    if match['is_finished'] and (match['home'] == team_picked or match['away'] == team_picked):
+                    team_picked_normalized = TEAM_NAME_MAPPING.get(team_picked, team_picked)
+                    if match['is_finished'] and (match['home'] == team_picked_normalized or match['away'] == team_picked_normalized):
                         # 1. Match Result Points (Group Stage)
                         if "Matchday" in match_stage:
-                            if match['winner'] == team_picked:
+                            if match['winner'] == team_picked_normalized:
                                 points_earned_in_match += SCORING_RULES[pot_category]['win']
                             elif match['is_draw']:
                                 points_earned_in_match += SCORING_RULES[pot_category]['draw']
@@ -194,7 +325,7 @@ def calculate_scores_and_timeline(picks_df, results_df):
                         elif "Final" in match_stage and "Third" not in match_stage:
                             points_earned_in_match += SCORING_RULES[pot_category]['Final']
                             # If they won the final
-                            if match['winner'] == team_picked:
+                            if match['winner'] == team_picked_normalized:
                                 points_earned_in_match += SCORING_RULES[pot_category]['Winner']
                                 
                     if points_earned_in_match > 0:
@@ -202,6 +333,8 @@ def calculate_scores_and_timeline(picks_df, results_df):
                         points_timeline.append({
                             'Date': match_date,
                             'Name': player_name,
+                            'Pot': pot_category,
+                            'Team': team_picked,
                             'Points Earned': points_earned_in_match
                         })
 
@@ -223,11 +356,85 @@ def calculate_scores_and_timeline(picks_df, results_df):
         final_df.insert(0, 'Rank', final_df.index)
         
     if not timeline_df.empty:
-        timeline_df = timeline_df.groupby(['Name', 'Date'])['Points Earned'].sum().reset_index()
         timeline_df = timeline_df.sort_values('Date')
-        timeline_df['Cumulative Points'] = timeline_df.groupby('Name')['Points Earned'].cumsum()
         
     return final_df, timeline_df
+
+# -----------------------------------------------------------------------------
+# DENSE TIMELINE GENERATION FOR TRACKER
+# -----------------------------------------------------------------------------
+def build_filtered_timeline(picks_df, raw_timeline_df, active_users, selected_pots_filter):
+    if raw_timeline_df.empty or not active_users:
+        return pd.DataFrame()
+    
+    all_dates = sorted(list(raw_timeline_df['Date'].dropna().unique()))
+    if not all_dates:
+        return pd.DataFrame()
+        
+    start_date = all_dates[0] - pd.Timedelta(days=1)
+    
+    dense_records = []
+    
+    for player_name in active_users:
+        user_rows = picks_df[picks_df['Name'] == player_name]
+        if user_rows.empty:
+            continue
+        user_row = user_rows.iloc[0]
+        
+        pot_a_team = user_row.get('Pot A', '')
+        pot_b_team = user_row.get('Pot B', '')
+        pot_c_team = user_row.get('Pot C', '')
+        pot_d_team = user_row.get('Pot D', '')
+        
+        # Initialize cumulative points per pot
+        cum_points = {'Pot A': 0.0, 'Pot B': 0.0, 'Pot C': 0.0, 'Pot D': 0.0}
+        
+        # Add start date row (0 points)
+        dense_records.append({
+            'Date': start_date,
+            'Name': player_name,
+            'Pot A Team': pot_a_team,
+            'Pot A Points': 0.0,
+            'Pot B Team': pot_b_team,
+            'Pot B Points': 0.0,
+            'Pot C Team': pot_c_team,
+            'Pot C Points': 0.0,
+            'Pot D Team': pot_d_team,
+            'Pot D Points': 0.0,
+            'Total Points': 0.0,
+            'Plotted Points': 0.0
+        })
+        
+        # Filter raw timeline for this user
+        user_timeline = raw_timeline_df[raw_timeline_df['Name'] == player_name]
+        
+        for date in all_dates:
+            # Find points earned on this date
+            date_points = user_timeline[user_timeline['Date'] == date]
+            
+            for pot in ['Pot A', 'Pot B', 'Pot C', 'Pot D']:
+                pot_earned = date_points[date_points['Pot'] == pot]['Points Earned'].sum()
+                cum_points[pot] += pot_earned
+                
+            total = sum(cum_points.values())
+            plotted = sum(cum_points[p] for p in selected_pots_filter if p in cum_points)
+            
+            dense_records.append({
+                'Date': date,
+                'Name': player_name,
+                'Pot A Team': pot_a_team,
+                'Pot A Points': cum_points['Pot A'],
+                'Pot B Team': pot_b_team,
+                'Pot B Points': cum_points['Pot B'],
+                'Pot C Team': pot_c_team,
+                'Pot C Points': cum_points['Pot C'],
+                'Pot D Team': pot_d_team,
+                'Pot D Points': cum_points['Pot D'],
+                'Total Points': total,
+                'Plotted Points': plotted
+            })
+            
+    return pd.DataFrame(dense_records)
 
 leaderboard_df, timeline_df = calculate_scores_and_timeline(user_picks, matches_df)
 
@@ -280,7 +487,37 @@ tab1, tab2, tab3, tab4 = st.tabs(["📊 Leaderboard", "🗓️ Schedule & Result
 
 with tab1:
     st.subheader("🥇 Current Standings")
-    if not leaderboard_df.empty:
+    
+    # Extract all unique countries selected by users across all pots
+    selected_pots = ['Pot A', 'Pot B', 'Pot C', 'Pot D']
+    unique_countries = set()
+    for pot in selected_pots:
+        if pot in user_picks.columns:
+            for country in user_picks[pot].dropna().astype(str):
+                cleaned = country.strip()
+                if cleaned:
+                    unique_countries.add(cleaned)
+    all_countries = sorted(list(unique_countries))
+    
+    selected_country = st.selectbox(
+        "🔍 Filter standings by country pick:",
+        options=all_countries,
+        index=None,
+        placeholder="Search or select a country (e.g., Brazil)..."
+    )
+    
+    # Filter the standings dataframe
+    display_df = leaderboard_df
+    if selected_country:
+        display_df = leaderboard_df[
+            (leaderboard_df['Pot A'] == selected_country) |
+            (leaderboard_df['Pot B'] == selected_country) |
+            (leaderboard_df['Pot C'] == selected_country) |
+            (leaderboard_df['Pot D'] == selected_country)
+        ]
+        st.info(f"Showing results filtered by country: **{selected_country}** ({len(display_df)} user(s))")
+
+    if not display_df.empty:
         # Construct the HTML table without leading spaces to avoid Markdown pre block interpretation
         table_html = """<style>
 .league-container {
@@ -327,6 +564,51 @@ with tab1:
     color: #0891b2 !important;
     font-weight: 700 !important;
 }
+/* Beautiful tooltip styles for country hover effect */
+.tooltip-container {
+    position: relative;
+    cursor: help;
+    border-bottom: 1px dashed rgba(128, 128, 128, 0.4);
+    display: inline-block;
+}
+.tooltip-text {
+    visibility: hidden;
+    width: 220px;
+    background-color: rgba(15, 23, 42, 0.96);
+    backdrop-filter: blur(8px);
+    color: #f1f5f9;
+    text-align: left;
+    border-radius: 8px;
+    padding: 10px 12px;
+    position: absolute;
+    z-index: 100;
+    bottom: 130%;
+    left: 50%;
+    transform: translateX(-50%) translateY(4px);
+    opacity: 0;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -4px rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    font-size: 0.78rem;
+    font-weight: 500;
+    line-height: 1.4;
+    pointer-events: none;
+}
+.tooltip-text::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    margin-left: -6px;
+    border-width: 6px;
+    border-style: solid;
+    border-color: rgba(15, 23, 42, 0.96) transparent transparent transparent;
+}
+.tooltip-container:hover .tooltip-text {
+    visibility: visible;
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
 </style>
 <div class="league-container">
 <table class="league-table">
@@ -342,26 +624,32 @@ with tab1:
 </tr>
 </thead>
 <tbody>"""
-        for _, row in leaderboard_df.iterrows():
+        for _, row in display_df.iterrows():
             rank = row['Rank']
             name = row['Name']
             pot_a = row['Pot A']
             pot_b = row['Pot B']
             pot_c = row['Pot C']
             pot_d = row['Pot D']
-            points = f"{row['Points']:.1f} 🔥"
+            points = f"{row['Points']:.1f}"
             
             glow_class = ""
             if rank in [1, 2, 3]:
                 glow_class = " class='top3-highlight'"
                 
+            # Wrap country names with the tooltip markup
+            pot_a_html = f"<span class='tooltip-container'>{pot_a}{get_tooltip_html(pot_a, 'Pot A', matches_df)}</span>" if (pot_a and not pd.isna(pot_a)) else ""
+            pot_b_html = f"<span class='tooltip-container'>{pot_b}{get_tooltip_html(pot_b, 'Pot B', matches_df)}</span>" if (pot_b and not pd.isna(pot_b)) else ""
+            pot_c_html = f"<span class='tooltip-container'>{pot_c}{get_tooltip_html(pot_c, 'Pot C', matches_df)}</span>" if (pot_c and not pd.isna(pot_c)) else ""
+            pot_d_html = f"<span class='tooltip-container'>{pot_d}{get_tooltip_html(pot_d, 'Pot D', matches_df)}</span>" if (pot_d and not pd.isna(pot_d)) else ""
+            
             table_html += f"""<tr>
 <td>{rank}</td>
 <td{glow_class}>{name}</td>
-<td>{pot_a}</td>
-<td>{pot_b}</td>
-<td>{pot_c}</td>
-<td>{pot_d}</td>
+<td>{pot_a_html}</td>
+<td>{pot_b_html}</td>
+<td>{pot_c_html}</td>
+<td>{pot_d_html}</td>
 <td><b>{points}</b></td>
 </tr>"""
             
@@ -370,7 +658,10 @@ with tab1:
 </div>"""
         st.markdown(table_html, unsafe_allow_html=True)
     else:
-        st.info("No data available to calculate standings.")
+        if selected_country:
+            st.warning(f"No users selected **{selected_country}**.")
+        else:
+            st.info("No data available to calculate standings.")
 
 with tab2:
     st.subheader("Group Stage Schedule (AEST)")
@@ -426,30 +717,120 @@ with tab2:
 with tab3:
     st.subheader("Title Race Tracker")
     if not timeline_df.empty:
-        start_date = timeline_df['Date'].min() - pd.Timedelta(days=1)
-        start_points = []
-        for player in user_picks['Name'].unique():
-            if player in timeline_df['Name'].values:
-                start_points.append({'Name': player, 'Date': start_date, 'Points Earned': 0, 'Cumulative Points': 0})
+        # Create the filter columns
+        f_col1, f_col2, f_col3 = st.columns(3)
         
-        full_timeline_df = pd.concat([pd.DataFrame(start_points), timeline_df], ignore_index=True).sort_values(by=['Name', 'Date'])
+        with f_col1:
+            all_users = sorted(user_picks['Name'].dropna().unique())
+            selected_users = st.multiselect(
+                "👤 Filter by Username:",
+                options=all_users,
+                default=all_users,
+                help="Select which users to display on the tracker."
+            )
+            
+        with f_col2:
+            # Extract all unique countries from user_picks
+            all_teams = sorted(list(set(
+                user_picks['Pot A'].dropna().tolist() +
+                user_picks['Pot B'].dropna().tolist() +
+                user_picks['Pot C'].dropna().tolist() +
+                user_picks['Pot D'].dropna().tolist()
+            )))
+            selected_teams = st.multiselect(
+                "🌍 Filter by Team Picked:",
+                options=all_teams,
+                help="Only show users who selected any of these teams."
+            )
+            
+        with f_col3:
+            selected_pots_filter = st.multiselect(
+                "🏆 Filter by Pot Category:",
+                options=["Pot A", "Pot B", "Pot C", "Pot D"],
+                default=["Pot A", "Pot B", "Pot C", "Pot D"],
+                help="Select which Pot categories contribute to the plotted points."
+            )
+            
+        # Resolve active users based on team filters
+        if selected_teams:
+            users_with_teams = user_picks[
+                user_picks['Pot A'].isin(selected_teams) |
+                user_picks['Pot B'].isin(selected_teams) |
+                user_picks['Pot C'].isin(selected_teams) |
+                user_picks['Pot D'].isin(selected_teams)
+            ]['Name'].unique()
+            active_users = [u for u in selected_users if u in users_with_teams]
+        else:
+            active_users = selected_users
+            
+        # Resolve pots
+        active_pots = selected_pots_filter if selected_pots_filter else ["Pot A", "Pot B", "Pot C", "Pot D"]
         
-        fig = px.line(
-            full_timeline_df, 
-            x='Date', 
-            y='Cumulative Points', 
-            color='Name',
-            markers=True,
-            hover_data={"Name": True, "Date": True, "Cumulative Points": True}
-        )
+        # Build the filtered dense dataset
+        chart_df = build_filtered_timeline(user_picks, timeline_df, active_users, active_pots)
         
-        fig.update_layout(
-            xaxis_title="Match Date",
-            yaxis_title="Total Points",
-            hovermode="x unified",
-            legend_title="Player"
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        if not chart_df.empty:
+            # Plot the line graph
+            fig = px.line(
+                chart_df,
+                x='Date',
+                y='Plotted Points',
+                color='Name',
+                markers=True,
+                custom_data=[
+                    'Name',          # 0
+                    'Pot A Team',    # 1
+                    'Pot A Points',  # 2
+                    'Pot B Team',    # 3
+                    'Pot B Points',  # 4
+                    'Pot C Team',    # 5
+                    'Pot C Points',  # 6
+                    'Pot D Team',    # 7
+                    'Pot D Points',  # 8
+                    'Total Points'   # 9
+                ]
+            )
+            
+            # Setup custom hover template
+            hover_temp = (
+                "<b>%{customdata[0]}</b><br>"
+                "Date: %{x|%Y-%m-%d}<br>"
+                "Plotted Points: %{y:.1f} pts<br>"
+                "Total Points: %{customdata[9]:.1f} 🔥<br>"
+                "<br>"
+                "🥇 Pot A: <b>%{customdata[1]}</b> (%{customdata[2]:.1f} pts)<br>"
+                "🥈 Pot B: <b>%{customdata[3]}</b> (%{customdata[4]:.1f} pts)<br>"
+                "🥉 Pot C: <b>%{customdata[5]}</b> (%{customdata[6]:.1f} pts)<br>"
+                "🔥 Pot D: <b>%{customdata[7]}</b> (%{customdata[8]:.1f} pts)<br>"
+                "<extra></extra>"
+            )
+            
+            fig.update_traces(hovertemplate=hover_temp)
+            
+            # Update layout aesthetics for a premium look
+            fig.update_layout(
+                xaxis_title="Match Date",
+                yaxis_title="Cumulative Points",
+                hovermode="closest",
+                legend_title="Player",
+                margin=dict(l=40, r=40, t=20, b=40),
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                xaxis=dict(
+                    showgrid=True,
+                    gridcolor="rgba(128, 128, 128, 0.1)",
+                    zeroline=False
+                ),
+                yaxis=dict(
+                    showgrid=True,
+                    gridcolor="rgba(128, 128, 128, 0.1)",
+                    zeroline=False
+                )
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No matching data found for the selected filters.")
     else:
         st.info("The race hasn't started yet! Graph will populate once matches are played.")
 
