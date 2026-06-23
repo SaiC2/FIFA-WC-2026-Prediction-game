@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import requests
 from datetime import datetime, timedelta
@@ -6,6 +7,14 @@ import pytz
 import plotly.express as px
 
 st.set_page_config(page_title="Office World Cup Prediction League", layout="wide", page_icon="🏆")
+
+# Date check for special June 24, 2026 AEST event (confetti + Portugal fire emoji)
+sydney_tz = pytz.timezone('Australia/Sydney')
+now_sydney = datetime.now(sydney_tz)
+is_special_day = (now_sydney.year == 2026 and now_sydney.month == 6 and now_sydney.day == 24)
+
+
+
 
 # -----------------------------------------------------------------------------
 # CONFIGURATION
@@ -624,6 +633,13 @@ with tab1:
 </tr>
 </thead>
 <tbody>"""
+        # Helper to render cell HTML with optional fire emoji for Portugal on special day
+        def get_pot_html(pot_val, pot_category):
+            if not pot_val or pd.isna(pot_val):
+                return ""
+            display_val = f"{pot_val} 🔥" if (is_special_day and str(pot_val).strip().lower() == "portugal") else pot_val
+            return f"<span class='tooltip-container'>{display_val}{get_tooltip_html(pot_val, pot_category, matches_df)}</span>"
+
         for _, row in display_df.iterrows():
             rank = row['Rank']
             name = row['Name']
@@ -638,10 +654,10 @@ with tab1:
                 glow_class = " class='top3-highlight'"
                 
             # Wrap country names with the tooltip markup
-            pot_a_html = f"<span class='tooltip-container'>{pot_a}{get_tooltip_html(pot_a, 'Pot A', matches_df)}</span>" if (pot_a and not pd.isna(pot_a)) else ""
-            pot_b_html = f"<span class='tooltip-container'>{pot_b}{get_tooltip_html(pot_b, 'Pot B', matches_df)}</span>" if (pot_b and not pd.isna(pot_b)) else ""
-            pot_c_html = f"<span class='tooltip-container'>{pot_c}{get_tooltip_html(pot_c, 'Pot C', matches_df)}</span>" if (pot_c and not pd.isna(pot_c)) else ""
-            pot_d_html = f"<span class='tooltip-container'>{pot_d}{get_tooltip_html(pot_d, 'Pot D', matches_df)}</span>" if (pot_d and not pd.isna(pot_d)) else ""
+            pot_a_html = get_pot_html(pot_a, 'Pot A')
+            pot_b_html = get_pot_html(pot_b, 'Pot B')
+            pot_c_html = get_pot_html(pot_c, 'Pot C')
+            pot_d_html = get_pot_html(pot_d, 'Pot D')
             
             table_html += f"""<tr>
 <td>{rank}</td>
@@ -870,3 +886,50 @@ with tab4:
     - **Making a Deep Run**: If your **Pot B** team qualifies for the Semi-Finals, you are awarded **4.5 points**.
     - **Cumulative Scoring**: You earn points for *every* stage your team advances through. If your Pot C team wins the whole tournament, you get points for qualifying for the Round of 32, Round of 16, Quarters, Semis, Finals, AND winning the Trophy!
     """)
+
+# Trigger confetti celebration at the end of execution (after all UI elements render)
+# Confetti is only active on June 24, 2026 (Australia/Sydney time)
+if is_special_day and "confetti_popped" not in st.session_state:
+    st.session_state["confetti_popped"] = True
+    components.html(
+        """
+        <script>
+            const parentDoc = window.parent.document;
+            const fireConfetti = () => {
+                if (window.parent.confetti) {
+                    // Left corner burst
+                    window.parent.confetti({
+                        particleCount: 150,
+                        spread: 80,
+                        angle: 60,
+                        origin: { x: 0, y: 0.8 }
+                    });
+                    // Right corner burst
+                    window.parent.confetti({
+                        particleCount: 150,
+                        spread: 80,
+                        angle: 120,
+                        origin: { x: 1, y: 0.8 }
+                    });
+                    // Center burst
+                    window.parent.confetti({
+                        particleCount: 100,
+                        spread: 100,
+                        origin: { x: 0.5, y: 0.6 }
+                    });
+                }
+            };
+
+            if (!parentDoc.getElementById('canvas-confetti-script')) {
+                const script = parentDoc.createElement('script');
+                script.id = 'canvas-confetti-script';
+                script.src = 'https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js';
+                script.onload = fireConfetti;
+                parentDoc.head.appendChild(script);
+            } else {
+                fireConfetti();
+            }
+        </script>
+        """,
+        height=0,
+    )
