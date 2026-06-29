@@ -164,13 +164,27 @@ matches_df, last_refreshed = fetch_tournament_data()
 # -----------------------------------------------------------------------------
 # TEAM NAME NORMALIZATION AND HELPER FUNCTIONS
 # -----------------------------------------------------------------------------
-TEAM_NAME_MAPPING = {
-    "T\u00fcrkiye": "Turkey",
-    "Cabo Verde": "Cape Verde",
-    "C\u00f4te d\u2019Ivoire": "Ivory Coast",
-    "IR Iran": "Iran",
-    "Czechia": "Czech Republic"
-}
+def normalize_team_name(name):
+    if not name or pd.isna(name):
+        return ""
+    name_str = str(name).strip()
+    mapping = {
+        "T\u00fcrkiye": "Turkey",
+        "Turkey": "Turkey",
+        "Cabo Verde": "Cape Verde",
+        "Cape Verde": "Cape Verde",
+        "C\u00f4te d\u2019Ivoire": "Ivory Coast",
+        "C\u00f4te d'Ivoire": "Ivory Coast",
+        "Ivory Coast": "Ivory Coast",
+        "IR Iran": "Iran",
+        "Iran": "Iran",
+        "Czechia": "Czech Republic",
+        "Czech Republic": "Czech Republic",
+        "Cura\u00e7ao": "Curaçao",
+        "Curaao": "Curaçao",
+        "Curaçao": "Curaçao"
+    }
+    return mapping.get(name_str, name_str)
 
 def abbreviate_team(name):
     special_abbrevs = {
@@ -222,74 +236,384 @@ def abbreviate_team(name):
         "Cape Verde": "CPV",
         "Cura\u00e7ao": "Cur",
         "Curaao": "Cur",
+        "Curaçao": "Cur",
         "South Korea": "KOR"
     }
     if name in special_abbrevs:
         return special_abbrevs[name]
-    # Fallback to first 3 letters capitalized
     clean_name = str(name).replace(" ", "")
     return clean_name[:3].title()
 
-def get_tooltip_html(country, pot_category, matches_df):
+def env_all_groups_finished(group_matches):
+    finished_count = sum(1 for _, m in group_matches.iterrows() if m['is_finished'])
+    return finished_count == len(group_matches) and len(group_matches) >= 72
+
+def get_best_third_placed_teams(group_matches):
+    groups = {}
+    for _, m in group_matches.iterrows():
+        g = m['group']
+        if g not in groups:
+            groups[g] = []
+        groups[g].append(m)
+        
+    third_place_teams = []
+    for g, ms in groups.items():
+        finished_ms = [m for m in ms if m['is_finished']]
+        if len(finished_ms) >= 6:
+            teams = {}
+            for m in ms:
+                t1 = normalize_team_name(m['home'])
+                t2 = normalize_team_name(m['away'])
+                for t in [t1, t2]:
+                    if t not in teams:
+                        teams[t] = {'pts': 0, 'gd': 0, 'gf': 0, 'wins': 0}
+                g1 = m['home_goals']
+                g2 = m['away_goals']
+                teams[t1]['gf'] += g1
+                teams[t2]['gf'] += g2
+                teams[t1]['gd'] += (g1 - g2)
+                teams[t2]['gd'] += (g2 - g1)
+                
+                mw = normalize_team_name(m['winner']) if m['winner'] else None
+                if mw == t1:
+                    teams[t1]['pts'] += 3
+                    teams[t1]['wins'] += 1
+                elif mw == t2:
+                    teams[t2]['pts'] += 3
+                    teams[t2]['wins'] += 1
+                elif m['is_draw']:
+                    teams[t1]['pts'] += 1
+                    teams[t2]['pts'] += 1
+                    
+            sorted_teams = sorted(teams.items(), key=lambda x: (x[1]['pts'], x[1]['gd'], x[1]['gf'], x[1]['wins']), reverse=True)
+            if len(sorted_teams) >= 3:
+                third_place_teams.append((sorted_teams[2][0], sorted_teams[2][1]))
+                
+    sorted_third = sorted(third_place_teams, key=lambda x: (x[1]['pts'], x[1]['gd'], x[1]['gf'], x[1]['wins']), reverse=True)
+    return [t for t, _ in sorted_third[:8]]
+
+def get_eliminated_teams(results_df):
+    eliminated_teams = set()
+    if results_df.empty:
+        return eliminated_teams
+        
+    if 'group' in results_df.columns:
+        group_matches = results_df[results_df['group'].notna() & (results_df['group'] != '')]
+    else:
+        group_matches = pd.DataFrame(columns=results_df.columns)
+    
+    groups = {}
+    for _, m in group_matches.iterrows():
+        g = m['group']
+        if g not in groups:
+            groups[g] = []
+        groups[g].append(m)
+        
+    third_place_teams = []
+    
+    for g, ms in groups.items():
+        finished_ms = [m for m in ms if m['is_finished']]
+        if len(finished_ms) >= 6:
+            teams = {}
+            for m in ms:
+                t1 = normalize_team_name(m['home'])
+                t2 = normalize_team_name(m['away'])
+                for t in [t1, t2]:
+                    if t not in teams:
+                        teams[t] = {'pts': 0, 'gd': 0, 'gf': 0, 'wins': 0}
+                g1 = m['home_goals'] if 'home_goals' in m else 0
+                g2 = m['away_goals'] if 'away_goals' in m else 0
+                teams[t1]['gf'] += g1
+                teams[t2]['gf'] += g2
+                teams[t1]['gd'] += (g1 - g2)
+                teams[t2]['gd'] += (g2 - g1)
+                
+                mw = normalize_team_name(m['winner']) if 'winner' in m and m['winner'] else None
+                if mw == t1:
+                    teams[t1]['pts'] += 3
+                    teams[t1]['wins'] += 1
+                elif mw == t2:
+                    teams[t2]['pts'] += 3
+                    teams[t2]['wins'] += 1
+                elif m['is_draw']:
+                    teams[t1]['pts'] += 1
+                    teams[t2]['pts'] += 1
+                    
+            sorted_teams = sorted(teams.items(), key=lambda x: (x[1]['pts'], x[1]['gd'], x[1]['gf'], x[1]['wins']), reverse=True)
+            if len(sorted_teams) >= 4:
+                eliminated_teams.add(sorted_teams[3][0])
+                third_place_teams.append((sorted_teams[2][0], sorted_teams[2][1]))
+                
+    if len(third_place_teams) == 12:
+        sorted_third = sorted(third_place_teams, key=lambda x: (x[1]['pts'], x[1]['gd'], x[1]['gf'], x[1]['wins']), reverse=True)
+        for t, _ in sorted_third[8:]:
+            eliminated_teams.add(t)
+            
+    if 'group' in results_df.columns:
+        knockout_matches = results_df[results_df['group'].isna() | (results_df['group'] == '')]
+    else:
+        knockout_matches = results_df
+        
+    for _, m in knockout_matches.iterrows():
+        if m['is_finished']:
+            home = normalize_team_name(m['home'])
+            away = normalize_team_name(m['away'])
+            w = normalize_team_name(m['winner']) if 'winner' in m and m['winner'] else None
+            if w:
+                loser = away if w == home else home
+                eliminated_teams.add(loser)
+                
+    return eliminated_teams
+
+def calculate_team_points_breakdown(team_name, pot_category, results_df):
+    if not team_name or pd.isna(team_name) or str(team_name).strip() == "":
+        return [], 0.0
+        
+    team_norm = normalize_team_name(team_name)
+    breakdown = []
+    total_pts = 0.0
+    
+    if results_df.empty:
+        return breakdown, total_pts
+        
+    rules = SCORING_RULES.get(pot_category, {})
+    if not rules:
+        return breakdown, total_pts
+        
+    # 1. Group Stage Matches (Wins and Draws)
+    if 'stage' in results_df.columns:
+        team_group_matches = results_df[
+            (results_df['is_finished'] == True) & 
+            (results_df['stage'].astype(str).str.contains("Matchday")) &
+            ((results_df['home'].apply(normalize_team_name) == team_norm) | 
+             (results_df['away'].apply(normalize_team_name) == team_norm))
+        ]
+    else:
+        team_group_matches = pd.DataFrame(columns=results_df.columns)
+        
+    for _, match in team_group_matches.iterrows():
+        match_date = match['date_aest'].date() if 'date_aest' in match and pd.notna(match['date_aest']) else datetime.now().date()
+        m_winner = normalize_team_name(match['winner']) if 'winner' in match and match['winner'] else None
+        
+        pts = 0.0
+        desc = ""
+        opp = match['away'] if normalize_team_name(match['home']) == team_norm else match['home']
+        opp_abbr = abbreviate_team(opp)
+        
+        if m_winner == team_norm:
+            pts = rules.get('win', 0.0)
+            desc = f"Win vs {opp_abbr}"
+        elif match['is_draw']:
+            pts = rules.get('draw', 0.0)
+            desc = f"Draw vs {opp_abbr}"
+            
+        if pts > 0:
+            breakdown.append((desc, pts, match_date))
+            total_pts += pts
+            
+    # 2. Group Stage Final Placements (1st and 2nd place bonuses)
+    if 'group' in results_df.columns:
+        group_matches = results_df[results_df['group'].notna() & (results_df['group'] != '')]
+    else:
+        group_matches = pd.DataFrame(columns=results_df.columns)
+        
+    team_group = None
+    for _, m in group_matches.iterrows():
+        if normalize_team_name(m['home']) == team_norm or normalize_team_name(m['away']) == team_norm:
+            team_group = m['group']
+            break
+            
+    group_placement_earned = False
+    group_placement_date = None
+    group_placement_desc = ""
+    group_placement_pts = 0.0
+    sorted_teams = []
+    group_last_date = None
+    
+    if team_group:
+        group_ms = group_matches[group_matches['group'] == team_group]
+        finished_group_ms = group_ms[group_ms['is_finished'] == True]
+        
+        if len(finished_group_ms) == len(group_ms) and len(group_ms) >= 6:
+            teams = {}
+            for _, m in group_ms.iterrows():
+                t1 = normalize_team_name(m['home'])
+                t2 = normalize_team_name(m['away'])
+                for t in [t1, t2]:
+                    if t not in teams:
+                        teams[t] = {'pts': 0, 'gd': 0, 'gf': 0, 'wins': 0}
+                g1 = m['home_goals'] if 'home_goals' in m else 0
+                g2 = m['away_goals'] if 'away_goals' in m else 0
+                teams[t1]['gf'] += g1
+                teams[t2]['gf'] += g2
+                teams[t1]['gd'] += (g1 - g2)
+                teams[t2]['gd'] += (g2 - g1)
+                
+                mw = normalize_team_name(m['winner']) if 'winner' in m and m['winner'] else None
+                if mw == t1:
+                    teams[t1]['pts'] += 3
+                    teams[t1]['wins'] += 1
+                elif mw == t2:
+                    teams[t2]['pts'] += 3
+                    teams[t2]['wins'] += 1
+                elif m['is_draw']:
+                    teams[t1]['pts'] += 1
+                    teams[t2]['pts'] += 1
+                    
+            sorted_teams = sorted(teams.items(), key=lambda x: (x[1]['pts'], x[1]['gd'], x[1]['gf'], x[1]['wins']), reverse=True)
+            group_last_date = max(m['date_aest'] for _, m in finished_group_ms.iterrows()).date()
+            
+            rank = -1
+            for idx, (t, _) in enumerate(sorted_teams):
+                if t == team_norm:
+                    rank = idx + 1
+                    break
+                    
+            if rank == 1:
+                group_placement_pts = rules.get('1st_place', 0.0)
+                group_placement_desc = "Group 1st Place"
+                group_placement_date = group_last_date
+                group_placement_earned = True
+            elif rank == 2:
+                group_placement_pts = rules.get('2nd_place', 0.0)
+                group_placement_desc = "Group 2nd Place"
+                group_placement_date = group_last_date
+                group_placement_earned = True
+
+    if group_placement_earned:
+        breakdown.append((group_placement_desc, group_placement_pts, group_placement_date))
+        total_pts += group_placement_pts
+
+    # 3. Stage Advancement Tracking
+    stage_dates = {}
+    
+    # Check group stage outcomes for R32
+    if team_group and sorted_teams and group_last_date:
+        rank = -1
+        for idx, (t, _) in enumerate(sorted_teams):
+            if t == team_norm:
+                rank = idx + 1
+                break
+        if rank in [1, 2]:
+            stage_dates['Round of 32'] = group_last_date
+        elif rank == 3:
+            if env_all_groups_finished(group_matches):
+                best_thirds = get_best_third_placed_teams(group_matches)
+                if team_norm in best_thirds:
+                    last_group_match_date = max(m['date_aest'] for _, m in group_matches.iterrows()).date()
+                    stage_dates['Round of 32'] = last_group_match_date
+
+    # Check knockout matches
+    if 'group' in results_df.columns:
+        knockout_matches = results_df[results_df['group'].isna() | (results_df['group'] == '')]
+    else:
+        knockout_matches = results_df
+        
+    for _, match in knockout_matches.iterrows():
+        if 'stage' in match and "Matchday" in str(match['stage']):
+            continue
+            
+        if not match['is_finished']:
+            continue
+            
+        stage = match['stage'] if 'stage' in match else 'Knockout'
+        match_date = match['date_aest'].date() if 'date_aest' in match and pd.notna(match['date_aest']) else datetime.now().date()
+        home = normalize_team_name(match['home'])
+        away = normalize_team_name(match['away'])
+        winner = normalize_team_name(match['winner']) if 'winner' in match and match['winner'] else None
+        
+        if home == team_norm or away == team_norm:
+            if "Round of 32" in stage:
+                if 'Round of 32' not in stage_dates or match_date < stage_dates['Round of 32']:
+                    stage_dates['Round of 32'] = match_date
+            elif "Round of 16" in stage:
+                if 'Round of 16' not in stage_dates or match_date < stage_dates['Round of 16']:
+                    stage_dates['Round of 16'] = match_date
+            elif "Quarter" in stage:
+                if 'Quarter-finals' not in stage_dates or match_date < stage_dates['Quarter-finals']:
+                    stage_dates['Quarter-finals'] = match_date
+            elif "Semi" in stage:
+                if 'Semi-finals' not in stage_dates or match_date < stage_dates['Semi-finals']:
+                    stage_dates['Semi-finals'] = match_date
+            elif "Final" in stage and "Third" not in stage:
+                if 'Final' not in stage_dates or match_date < stage_dates['Final']:
+                    stage_dates['Final'] = match_date
+                    
+        if winner == team_norm:
+            if "Round of 32" in stage:
+                if 'Round of 16' not in stage_dates or match_date < stage_dates['Round of 16']:
+                    stage_dates['Round of 16'] = match_date
+            elif "Round of 16" in stage:
+                if 'Quarter-finals' not in stage_dates or match_date < stage_dates['Quarter-finals']:
+                    stage_dates['Quarter-finals'] = match_date
+            elif "Quarter" in stage:
+                if 'Semi-finals' not in stage_dates or match_date < stage_dates['Semi-finals']:
+                    stage_dates['Semi-finals'] = match_date
+            elif "Semi" in stage:
+                if 'Final' not in stage_dates or match_date < stage_dates['Final']:
+                    stage_dates['Final'] = match_date
+            elif "Final" in stage and "Third" not in stage:
+                if 'Winner' not in stage_dates or match_date < stage_dates['Winner']:
+                    stage_dates['Winner'] = match_date
+
+    # Add the advancement points to the breakdown in order of stages
+    adv_stages = [
+        ('Round of 32', 'Qualify for R32'),
+        ('Round of 16', 'Qualify for R16'),
+        ('Quarter-finals', 'Qualify for QF'),
+        ('Semi-finals', 'Qualify for SF'),
+        ('Final', 'Qualify for Final'),
+        ('Winner', 'World Cup Champion 🏆')
+    ]
+    
+    for stage_key, desc in adv_stages:
+        if stage_key in stage_dates:
+            pts = rules.get(stage_key, 0.0)
+            breakdown.append((desc, pts, stage_dates[stage_key]))
+            total_pts += pts
+            
+    return breakdown, total_pts
+
+def get_tooltip_html(country, pot_category, matches_df, align_vertical="top"):
     if not country or pd.isna(country) or str(country).strip() == "":
         return ""
     country_str = str(country).strip()
-    norm_c = TEAM_NAME_MAPPING.get(country_str, country_str)
+    norm_c = normalize_team_name(country_str)
     
-    # Find all matches for this country that are finished
-    country_matches = matches_df[
-        (matches_df['is_finished'] == True) & 
-        ((matches_df['home'] == norm_c) | (matches_df['away'] == norm_c))
-    ]
-    if country_matches.empty:
-        return '<span class="tooltip-text"><span style="color: #94a3b8; font-style: italic;">Matches yet to be played.</span></span>'
+    breakdown, total_pts = calculate_team_points_breakdown(country_str, pot_category, matches_df)
     
+    if not breakdown:
+        return '<span class="tooltip-text"><span style="color: #94a3b8; font-style: italic;">No points earned yet.</span></span>'
+        
+    align_class = "tooltip-align-right" if pot_category in ['Pot C', 'Pot D'] else "tooltip-align-left"
+    align_v_class = "tooltip-align-bottom" if align_vertical == "bottom" else "tooltip-align-top"
+        
+    eliminated_teams = get_eliminated_teams(matches_df)
+    if norm_c in eliminated_teams:
+        status_str = '<span style="color: #EF4444; font-size: 0.7rem; font-weight: bold; margin-left: auto;">Eliminated 🔴</span>'
+    else:
+        status_str = '<span style="color: #10B981; font-size: 0.7rem; font-weight: bold; margin-left: auto;">Active 🟢</span>'
+        
     html_lines = []
-    for _, match in country_matches.iterrows():
-        home_abbr = abbreviate_team(match['home'])
-        away_abbr = abbreviate_team(match['away'])
-        home_goals = match['home_goals']
-        away_goals = match['away_goals']
-        
-        # Calculate points relative to this country
-        pts = 0
-        match_stage = str(match['stage'])
-        if pot_category in SCORING_RULES:
-            # 1. Match Result Points (Group Stage)
-            if "Matchday" in match_stage:
-                if match['winner'] == norm_c:
-                    pts += SCORING_RULES[pot_category]['win']
-                elif match['is_draw']:
-                    pts += SCORING_RULES[pot_category]['draw']
-            
-            # 2. Advancement Points
-            if "Round of 32" in match_stage:
-                pts += SCORING_RULES[pot_category]['Round of 32']
-            elif "Round of 16" in match_stage:
-                pts += SCORING_RULES[pot_category]['Round of 16']
-            elif "Quarter" in match_stage:
-                pts += SCORING_RULES[pot_category]['Quarter-finals']
-            elif "Semi" in match_stage:
-                pts += SCORING_RULES[pot_category]['Semi-finals']
-            elif "Final" in match_stage and "Third" not in match_stage:
-                pts += SCORING_RULES[pot_category]['Final']
-                if match['winner'] == norm_c:
-                    pts += SCORING_RULES[pot_category]['Winner']
-        
+    html_lines.append(f'<div style="font-weight: 700; margin-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.2); padding-bottom: 4px; color: #38BDF8; display: flex; align-items: center; justify-content: space-between; gap: 8px;"><span>{norm_c} ({total_pts:g} pts)</span>{status_str}</div>')
+    
+    for desc, pts, date in breakdown:
         pts_str = f"+{pts:g} pts" if pts > 0 else "0 pts"
-        
-        # Determine result relative to this country
-        if match['is_draw']:
-            res_html = f'<span style="color: #F59E0B; font-weight: bold; background: rgba(245, 158, 11, 0.15); padding: 1px 4px; border-radius: 3px; font-size: 0.75rem;">D ({pts_str})</span>'
-        elif match['winner'] == norm_c:
-            res_html = f'<span style="color: #10B981; font-weight: bold; background: rgba(16, 185, 129, 0.15); padding: 1px 4px; border-radius: 3px; font-size: 0.75rem;">W ({pts_str})</span>'
+        if "Win" in desc or "1st" in desc or "Champion" in desc:
+            color = "#10B981"
+            bg = "rgba(16, 185, 129, 0.15)"
+        elif "Draw" in desc or "2nd" in desc:
+            color = "#F59E0B"
+            bg = "rgba(245, 158, 11, 0.15)"
         else:
-            res_html = f'<span style="color: #EF4444; font-weight: bold; background: rgba(239, 68, 68, 0.15); padding: 1px 4px; border-radius: 3px; font-size: 0.75rem;">L ({pts_str})</span>'
+            color = "#38BDF8"
+            bg = "rgba(56, 189, 248, 0.15)"
             
-        html_lines.append(f'<div style="white-space: nowrap; margin-bottom: 4px;">{home_abbr} Vs {away_abbr}, {home_goals} - {away_goals} {res_html}</div>')
+        badge_html = f'<span style="color: {color}; font-weight: bold; background: {bg}; padding: 1px 4px; border-radius: 3px; font-size: 0.72rem; margin-left: auto;">{pts_str}</span>'
+        html_lines.append(f'<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; gap: 8px; white-space: nowrap;"><span>{desc}</span>{badge_html}</div>')
         
     tooltip_inner = "".join(html_lines)
-    return f'<span class="tooltip-text">{tooltip_inner}</span>'
+    return f'<span class="tooltip-text {align_v_class} {align_class}">{tooltip_inner}</span>'
 
 # -----------------------------------------------------------------------------
 # SCORING ENGINE
@@ -307,45 +631,17 @@ def calculate_scores_and_timeline(picks_df, results_df):
                 continue
             team_picked = row[pot_category]
             
-            if not results_df.empty:
-                for _, match in results_df.iterrows():
-                    match_date = match['date_aest'].date()
-                    match_stage = str(match['stage'])
-                    points_earned_in_match = 0
-                    
-                    team_picked_normalized = TEAM_NAME_MAPPING.get(team_picked, team_picked)
-                    if match['is_finished'] and (match['home'] == team_picked_normalized or match['away'] == team_picked_normalized):
-                        # 1. Match Result Points (Group Stage)
-                        if "Matchday" in match_stage:
-                            if match['winner'] == team_picked_normalized:
-                                points_earned_in_match += SCORING_RULES[pot_category]['win']
-                            elif match['is_draw']:
-                                points_earned_in_match += SCORING_RULES[pot_category]['draw']
-                        
-                        # 2. Advancement Points
-                        if "Round of 32" in match_stage:
-                            points_earned_in_match += SCORING_RULES[pot_category]['Round of 32']
-                        elif "Round of 16" in match_stage:
-                            points_earned_in_match += SCORING_RULES[pot_category]['Round of 16']
-                        elif "Quarter" in match_stage:
-                            points_earned_in_match += SCORING_RULES[pot_category]['Quarter-finals']
-                        elif "Semi" in match_stage:
-                            points_earned_in_match += SCORING_RULES[pot_category]['Semi-finals']
-                        elif "Final" in match_stage and "Third" not in match_stage:
-                            points_earned_in_match += SCORING_RULES[pot_category]['Final']
-                            # If they won the final
-                            if match['winner'] == team_picked_normalized:
-                                points_earned_in_match += SCORING_RULES[pot_category]['Winner']
-                                
-                    if points_earned_in_match > 0:
-                        total_points += points_earned_in_match
-                        points_timeline.append({
-                            'Date': match_date,
-                            'Name': player_name,
-                            'Pot': pot_category,
-                            'Team': team_picked,
-                            'Points Earned': points_earned_in_match
-                        })
+            breakdown, team_pts = calculate_team_points_breakdown(team_picked, pot_category, results_df)
+            total_points += team_pts
+            
+            for desc, pts_earned, match_date in breakdown:
+                points_timeline.append({
+                    'Date': match_date,
+                    'Name': player_name,
+                    'Pot': pot_category,
+                    'Team': team_picked,
+                    'Points Earned': pts_earned
+                })
 
         leaderboard_records.append({
             'Name': player_name,
@@ -530,8 +826,7 @@ with tab1:
         # Construct the HTML table without leading spaces to avoid Markdown pre block interpretation
         table_html = """<style>
 .league-container {
-    height: 5000px;
-    max-height: 5000px;
+    max-height: 650px;
     overflow-y: auto;
     border: 1px solid rgba(128, 128, 128, 0.2);
     border-radius: 8px;
@@ -582,8 +877,8 @@ with tab1:
 }
 .tooltip-text {
     visibility: hidden;
-    width: 220px;
-    background-color: rgba(15, 23, 42, 0.96);
+    width: 280px;
+    background-color: rgba(15, 23, 42, 0.98);
     backdrop-filter: blur(8px);
     color: #f1f5f9;
     text-align: left;
@@ -591,9 +886,6 @@ with tab1:
     padding: 10px 12px;
     position: absolute;
     z-index: 100;
-    bottom: 130%;
-    left: 50%;
-    transform: translateX(-50%) translateY(4px);
     opacity: 0;
     transition: opacity 0.2s ease, transform 0.2s ease;
     box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -4px rgba(0, 0, 0, 0.4);
@@ -603,20 +895,61 @@ with tab1:
     line-height: 1.4;
     pointer-events: none;
 }
-.tooltip-text::after {
+.tooltip-align-top {
+    bottom: 130%;
+}
+.tooltip-align-bottom {
+    top: 130%;
+}
+.tooltip-align-left {
+    left: 0;
+    transform: translateY(4px);
+}
+.tooltip-align-left::after {
     content: "";
     position: absolute;
     top: 100%;
-    left: 50%;
-    margin-left: -6px;
+    left: 20px;
     border-width: 6px;
     border-style: solid;
-    border-color: rgba(15, 23, 42, 0.96) transparent transparent transparent;
+    border-color: rgba(15, 23, 42, 0.98) transparent transparent transparent;
+}
+.tooltip-align-right {
+    right: 0;
+    transform: translateY(4px);
+}
+.tooltip-align-right::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    right: 20px;
+    border-width: 6px;
+    border-style: solid;
+    border-color: rgba(15, 23, 42, 0.98) transparent transparent transparent;
+}
+/* Arrows for bottom-aligned tooltips */
+.tooltip-align-bottom.tooltip-align-left::after {
+    content: "";
+    position: absolute;
+    bottom: 100%;
+    left: 20px;
+    border-width: 6px;
+    border-style: solid;
+    border-color: transparent transparent rgba(15, 23, 42, 0.98) transparent;
+}
+.tooltip-align-bottom.tooltip-align-right::after {
+    content: "";
+    position: absolute;
+    bottom: 100%;
+    right: 20px;
+    border-width: 6px;
+    border-style: solid;
+    border-color: transparent transparent rgba(15, 23, 42, 0.98) transparent;
 }
 .tooltip-container:hover .tooltip-text {
     visibility: visible;
     opacity: 1;
-    transform: translateX(-50%) translateY(0);
+    transform: translateY(0);
 }
 </style>
 <div class="league-container">
@@ -634,11 +967,20 @@ with tab1:
 </thead>
 <tbody>"""
         # Helper to render cell HTML with optional fire emoji for Portugal on special day
-        def get_pot_html(pot_val, pot_category):
+        eliminated_teams = get_eliminated_teams(matches_df)
+        def get_pot_html(pot_val, pot_category, rank):
             if not pot_val or pd.isna(pot_val):
                 return ""
+            norm_val = normalize_team_name(pot_val)
             display_val = f"{pot_val} 🔥" if (is_special_day and str(pot_val).strip().lower() == "portugal") else pot_val
-            return f"<span class='tooltip-container'>{display_val}{get_tooltip_html(pot_val, pot_category, matches_df)}</span>"
+            
+            align_v = "bottom" if rank <= 4 else "top"
+            
+            if norm_val in eliminated_teams:
+                style_str = "background-color: rgba(239, 68, 68, 0.15); color: #EF4444; border: 1px solid rgba(239, 68, 68, 0.3); padding: 2px 6px; border-radius: 4px; font-weight: 500; display: inline-block;"
+                return f"<span class='tooltip-container'><span style='{style_str}'>{display_val}</span>{get_tooltip_html(pot_val, pot_category, matches_df, align_v)}</span>"
+            else:
+                return f"<span class='tooltip-container'>{display_val}{get_tooltip_html(pot_val, pot_category, matches_df, align_v)}</span>"
 
         for _, row in display_df.iterrows():
             rank = row['Rank']
@@ -654,10 +996,10 @@ with tab1:
                 glow_class = " class='top3-highlight'"
                 
             # Wrap country names with the tooltip markup
-            pot_a_html = get_pot_html(pot_a, 'Pot A')
-            pot_b_html = get_pot_html(pot_b, 'Pot B')
-            pot_c_html = get_pot_html(pot_c, 'Pot C')
-            pot_d_html = get_pot_html(pot_d, 'Pot D')
+            pot_a_html = get_pot_html(pot_a, 'Pot A', rank)
+            pot_b_html = get_pot_html(pot_b, 'Pot B', rank)
+            pot_c_html = get_pot_html(pot_c, 'Pot C', rank)
+            pot_d_html = get_pot_html(pot_d, 'Pot D', rank)
             
             table_html += f"""<tr>
 <td>{rank}</td>

@@ -131,10 +131,76 @@ def test_winning_tournament():
     assert eve_points == 12.0, f"Expected 12 points for winning tournament in Pot C, got {eve_points}"
     print("test_winning_tournament passed!")
 
+def test_group_stage_bonuses_and_r32_qualification():
+    # Setup mock user picks
+    picks_df = pd.DataFrame({
+        'Name': ['Alice', 'Bob'],
+        'Pot A': ['Mexico', 'South Korea'], # Mexico finishes 1st, South Korea 3rd (eliminated)
+        'Pot B': ['South Africa', 'Canada']  # South Africa finishes 2nd, Canada finishes 2nd in another group
+    })
+    
+    # 6 matches for Group A: Mexico, South Africa, South Korea, Czech Republic
+    # Results:
+    # Mexico: 9 pts (1st)
+    # South Africa: 4 pts (2nd)
+    # South Korea: 3 pts (3rd)
+    # Czech Republic: 1 pt (4th)
+    results_data = [
+        {'date_aest': pd.to_datetime('2026-06-11'), 'home': 'Mexico', 'away': 'South Africa', 'winner': 'Mexico', 'is_draw': False, 'is_finished': True, 'stage': 'Matchday 1', 'group': 'Group A', 'home_goals': 1, 'away_goals': 0},
+        {'date_aest': pd.to_datetime('2026-06-11'), 'home': 'South Korea', 'away': 'Czech Republic', 'winner': 'South Korea', 'is_draw': False, 'is_finished': True, 'stage': 'Matchday 1', 'group': 'Group A', 'home_goals': 1, 'away_goals': 0},
+        {'date_aest': pd.to_datetime('2026-06-15'), 'home': 'Mexico', 'away': 'South Korea', 'winner': 'Mexico', 'is_draw': False, 'is_finished': True, 'stage': 'Matchday 2', 'group': 'Group A', 'home_goals': 2, 'away_goals': 0},
+        {'date_aest': pd.to_datetime('2026-06-15'), 'home': 'South Africa', 'away': 'Czech Republic', 'winner': 'South Africa', 'is_draw': False, 'is_finished': True, 'stage': 'Matchday 2', 'group': 'Group A', 'home_goals': 1, 'away_goals': 0},
+        {'date_aest': pd.to_datetime('2026-06-20'), 'home': 'Mexico', 'away': 'Czech Republic', 'winner': 'Mexico', 'is_draw': False, 'is_finished': True, 'stage': 'Matchday 3', 'group': 'Group A', 'home_goals': 3, 'away_goals': 0},
+        {'date_aest': pd.to_datetime('2026-06-20'), 'home': 'South Africa', 'away': 'South Korea', 'winner': None, 'is_draw': True, 'is_finished': True, 'stage': 'Matchday 3', 'group': 'Group A', 'home_goals': 1, 'away_goals': 1}
+    ]
+    results_df = pd.DataFrame(results_data)
+    
+    leaderboard_df, _ = calculate_scores_and_timeline(picks_df, results_df)
+    
+    # Alice picks:
+    # - Mexico (Pot A): 3 wins (3 * 2 = 6 pts), 1st place bonus (+3 pts), Qualify for R32 (+1 pt) -> 10 pts
+    # - South Africa (Pot B): 1 win (2.5 pts), 1 draw (1 pt), 1 loss (0 pts), 2nd place bonus (+2 pts), Qualify for R32 (+1 pt) -> 6.5 pts
+    # Total Alice: 16.5 pts
+    alice_points = leaderboard_df[leaderboard_df['Name'] == 'Alice'].iloc[0]['Points']
+    assert alice_points == 16.5, f"Expected 16.5 points for Alice, got {alice_points}"
+    
+    # Bob picks:
+    # - South Korea (Pot A): 1 win (2 pts), 1 draw (1 pt), 1 loss (0 pts), 3rd place (no group bonus, not qualified yet because other groups not finished) -> 3 pts
+    # - Canada (Pot B): no matches -> 0 pts
+    # Total Bob: 3.0 pts
+    bob_points = leaderboard_df[leaderboard_df['Name'] == 'Bob'].iloc[0]['Points']
+    assert bob_points == 3.0, f"Expected 3.0 points for Bob, got {bob_points}"
+    print("test_group_stage_bonuses_and_r32_qualification passed!")
+
+def test_eliminated_teams_detection():
+    from app import get_eliminated_teams
+    
+    # Group A: Mexico (9), South Africa (4), South Korea (3), Czech Republic (1)
+    results_data = [
+        {'date_aest': pd.to_datetime('2026-06-11'), 'home': 'Mexico', 'away': 'South Africa', 'winner': 'Mexico', 'is_draw': False, 'is_finished': True, 'stage': 'Matchday 1', 'group': 'Group A', 'home_goals': 1, 'away_goals': 0},
+        {'date_aest': pd.to_datetime('2026-06-11'), 'home': 'South Korea', 'away': 'Czech Republic', 'winner': 'South Korea', 'is_draw': False, 'is_finished': True, 'stage': 'Matchday 1', 'group': 'Group A', 'home_goals': 1, 'away_goals': 0},
+        {'date_aest': pd.to_datetime('2026-06-15'), 'home': 'Mexico', 'away': 'South Korea', 'winner': 'Mexico', 'is_draw': False, 'is_finished': True, 'stage': 'Matchday 2', 'group': 'Group A', 'home_goals': 2, 'away_goals': 0},
+        {'date_aest': pd.to_datetime('2026-06-15'), 'home': 'South Africa', 'away': 'Czech Republic', 'winner': 'South Africa', 'is_draw': False, 'is_finished': True, 'stage': 'Matchday 2', 'group': 'Group A', 'home_goals': 1, 'away_goals': 0},
+        {'date_aest': pd.to_datetime('2026-06-20'), 'home': 'Mexico', 'away': 'Czech Republic', 'winner': 'Mexico', 'is_draw': False, 'is_finished': True, 'stage': 'Matchday 3', 'group': 'Group A', 'home_goals': 3, 'away_goals': 0},
+        {'date_aest': pd.to_datetime('2026-06-20'), 'home': 'South Africa', 'away': 'South Korea', 'winner': None, 'is_draw': True, 'is_finished': True, 'stage': 'Matchday 3', 'group': 'Group A', 'home_goals': 1, 'away_goals': 1},
+        # Knockout match: Colombia vs Japan (winner Colombia, Japan eliminated)
+        {'date_aest': pd.to_datetime('2026-06-25'), 'home': 'Colombia', 'away': 'Japan', 'winner': 'Colombia', 'is_draw': False, 'is_finished': True, 'stage': 'Round of 32', 'group': ''}
+    ]
+    results_df = pd.DataFrame(results_data)
+    
+    eliminated = get_eliminated_teams(results_df)
+    assert 'Czech Republic' in eliminated, "Expected Czech Republic to be eliminated (4th place)"
+    assert 'Japan' in eliminated, "Expected Japan to be eliminated (lost R32)"
+    assert 'Mexico' not in eliminated, "Expected Mexico to be active"
+    assert 'Colombia' not in eliminated, "Expected Colombia to be active"
+    print("test_eliminated_teams_detection passed!")
+
 if __name__ == "__main__":
     print("Running Scoring Engine Tests...")
     test_group_stage_win_pot_a_and_d()
     test_draws_across_pots()
     test_knockout_advancement()
     test_winning_tournament()
-    print("✅ All tests passed!")
+    test_group_stage_bonuses_and_r32_qualification()
+    test_eliminated_teams_detection()
+    print("OK: All tests passed!")
